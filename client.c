@@ -4,14 +4,13 @@
 #include <curl/curl.h>
 
 #define BUFSIZE 150000
-#define TARGET 0
 char buffer[BUFSIZE];
 char test[] = "<div class=\"message\">\nBecause of weather, Calvert Hall will close today 11:45 a.m.&nbsp; The Howard County us will depart at 12:00.&nbsp; All athletic and activities are cancelled.&nbsp; Detention will not be held.\n</div>";
 
 size_t lr = 0;
 
-/* Curl callback function that I pilfered from 
-a generous donator online */
+/* A libcurl callback function that I pilfered from 
+a generous donor online */
 size_t filterit(void *ptr, size_t size, size_t nmemb, void *stream) {
   if ( (lr + size*nmemb) > BUFSIZE ) return BUFSIZE;
   memcpy(stream+lr, ptr, size*nmemb);
@@ -31,7 +30,6 @@ void scrape() {
   curl_easy_setopt(curlHandle, CURLOPT_WRITEDATA, buffer);
   curl_easy_perform(curlHandle);
   curl_easy_cleanup(curlHandle);
-  buffer[lr] = 0;
   
   // Awesome parsing algorithm I made that returns the content of the <message> tag
   bool state = false;
