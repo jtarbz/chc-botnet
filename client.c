@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <curl/curl.h>
+#include <pthread.h>
 
 #define BUFSIZE 150000
 char buffer[BUFSIZE];
@@ -21,7 +22,7 @@ size_t filterit(void *ptr, size_t size, size_t nmemb, void *stream) {
 /* Scrape the CHC website and save content to a buffer;
 This should be implemented asynchronously for compatability
 with client socket functions */
-void scrape() {
+void *scrape() {
   // This is libcurl stuff; set an easy handle / options, and then scrape
   CURL *curlHandle = curl_easy_init();
   curl_easy_setopt(curlHandle, CURLOPT_URL, "http://www.calverthall.com");
@@ -30,13 +31,15 @@ void scrape() {
   curl_easy_setopt(curlHandle, CURLOPT_WRITEDATA, buffer);
   curl_easy_perform(curlHandle);
   curl_easy_cleanup(curlHandle);
-  
-  // Awesome parsing algorithm I made that returns the content of the <message> tag
+  buffer[lr] = 0;
+
+  // Awesome parsing algorithm I made that returns the content of the <div class="message"> tag
   bool state = false;
   char *token = strtok(test, "<>");
   while(token != NULL && state == false) {
     if(strcmp(token, "div class=\"message\"") == 0) {
       token = strtok(NULL, "<>");
+      // Add trivial code to parse out extra HTML gobbly-gook . . .
       puts(token);
       state = true;
     }
@@ -45,7 +48,14 @@ void scrape() {
 }
 
 int main() {
-  scrape();
+  pthread_t tid;  // Thread ID
+  pthread_attr_t attr;    // Create attributes
+  pthread_attr_init(&attr);
+  pthread_create(&tid, &attr, scrape, NULL);    // Start the scraping thread
+
+  printf("haha lol this thread is taking forever\n");
+  pthread_join(tid, NULL);    // Wait until the thread is done
+
 
   return 0;
 }
