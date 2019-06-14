@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <curl/curl.h>
@@ -6,7 +7,7 @@
 
 #define BUFSIZE 150000
 char buffer[BUFSIZE];
-char test[] = "<div class=\"message\">\nBecause of weather, Calvert Hall will close today 11:45 a.m.&nbsp; The Howard County us will depart at 12:00.&nbsp; All athletic and activities are cancelled.&nbsp; Detention will not be held.\n</div>";
+char test[] = "abcdefg<html><div class=\"message\">\nBecause of weather, Calvert Hall will close today at 11:45 a.m.&nbsp; The Howard County us will depart at 12:00.&nbsp; All athletic and activities are cancelled.&nbsp; Detention will not be held.\n</div>abcdefg</html>";
 
 size_t lr = 0;
 
@@ -53,9 +54,8 @@ int main() {
   pthread_attr_init(&attr);
   pthread_create(&tid, &attr, scrape, NULL);    // Start the scraping thread
 
-  printf("haha lol this thread is taking forever\n");
+  puts("haha lol this thread is taking forever");
   pthread_join(tid, NULL);    // Wait until the thread is done
 
-
-  return 0;
+  exit(0);
 }
