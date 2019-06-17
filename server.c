@@ -13,7 +13,9 @@ void frick(char *msg) {
 
 void handle_client(int csock) {
     char msg[512];
-    recv(csock, msg, 512, 0);
+    int n_bytes = recv(csock, msg, 511, 0);
+    msg[n_bytes] = '\0';
+    /* Add trivial code to format HTML junk and tabs out . . . */
     puts(msg);
 }
 
