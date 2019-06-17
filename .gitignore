@@ -53,4 +53,4 @@ dkms.conf
 
 #stuff i added
 .vscode
-*.html
+/snowday.html
