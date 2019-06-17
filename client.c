@@ -34,7 +34,7 @@ with client socket functions */
 void *scrape(void *sockish) {
   /* LOAD HTML FILE FOR TESTING PURPOSES 
   DELETE FOR FINAL COMMIT */
-  FILE *fp = fopen("snowday.html", "r");
+  FILE *fp = fopen("../snowday.html", "r");
   if (fp != NULL) {
     size_t newLen = fread(buffer, sizeof(char), BUFSIZE, fp);
     if(ferror(fp) != 0) fputs("Error reading file", stderr);
