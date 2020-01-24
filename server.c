@@ -1,122 +1,207 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
-#include <signal.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include <sys/socket.h>
+#include <sys/epoll.h>
 #include <arpa/inet.h>
-#include <pthread.h>
+#include <signal.h>
 
-#define PINGINT 2
-bool interrupt = false;
-unsigned int thr_cnt = 0;   // Thread count
+#define PORT 8081
+#define MAX_CLIENTS 256
+#define RECV_SIZE 1024
 
-/* Thread arguments structure; allows for future functionality expansion */
-struct thread_args {
-    int csock;
-};
+bool interrupt = false;	// this guy lets the main loop know when it's time to shut down ***gracefully***
 
-/* Standard error function because I am lazy */
-void frick(char *msg) {
-    puts(msg);
-    exit(1);
+/* custom signal handler for graceful shutdown purposes */
+void handle_signal(int sig_type) {
+	if(sig_type == SIGINT || sig_type == SIGTERM) {	// SIGPIPE should just be ignored, we don't care if some idiot disconnected
+		printf("beginning clean server shutdown due to interrupt ...\n");
+		interrupt = true;
+	}
+
+	return;
 }
 
-void handle_interrupt(int sig_type) {
-    printf("Beginning server shutdown ...\n");
-    interrupt = true;
+/* accept a client and add it to the epoll interest list  */
+int accept_client(int server_socket, int epoll_fd) {
+	int client_socket;
+	unsigned int client_length;
+	struct sockaddr_in client_addr;
+	struct epoll_event client_event;
+
+	/* here's the actual accepting part */
+	if((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_length)) < 0) {
+		fprintf(stderr, "failed to accept a client\n");
+		return -1;
+	}
+
+	/* add client socket to epoll interest list */
+	client_event.events = EPOLLIN;
+	client_event.data.fd = client_socket;
+	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &client_event) < 0) {
+		fprintf(stderr, "failed to add client to interest list");
+		close(client_socket);
+		return -1;
+	}
+
+	return client_socket;
 }
 
-/* Modularized client connection function */
-int accept_client(int ssock) {
-    int csock;
-    struct sockaddr_in caddr;
-    unsigned int clength;
+/* receive snow day message from client and then handle it */
+int handle_client(int client_socket) {
+	unsigned char recv_buffer[RECV_SIZE];
+	unsigned int recvd_msg_size = 0;
 
-    clength = sizeof caddr;
-    if((csock = accept(ssock, (struct sockaddr *)&caddr, &clength)) < 0) frick("Failed to accept a connection");
-    printf("Handling client %s\n", inet_ntoa(caddr.sin_addr));
-    return csock;
-}
+	/* receive only one message up to (RECV_SIZE - 1) bytes in size */
+	do {
+		if(interrupt == true) {	// implement graceful shutdown
+			close(client_socket);
+			return 0;
+		}
 
-/* Handle data incoming from the client; this runs in an infinite loop per-thread */
-void handle_client(int csock) {
-    char msg[512];
-    for(;;) {
-        /* Check if client is still alive after ping period */
-        if(recv(csock, msg, 511, MSG_PEEK | MSG_DONTWAIT) == 0) {
-            close(csock);
-            printf("A client disconnected!\n");   // I don't feel like passing the client address through like three functions right now
-            break;
-        }
-        /* Check if SIGINT has been received */
-        if(interrupt == true) {
-            close(csock);
-            break;
-        }
+		if((recvd_msg_size += recv(client_socket, recv_buffer + recvd_msg_size, RECV_SIZE - 1, 0)) == 0) {
+			fprintf(stderr, "client socket has disconnected\n");
+			return -1;
+		}
+	} while(recvd_msg_size < 0);
 
-        /* Receive client message */
-        int n_bytes = recv(csock, msg, 511, 0);
-        msg[n_bytes] = '\0';
-        puts(msg);
-        /* Handler for snowdays eventually */
-        sleep(PINGINT);   // Wait on ping interval
-    }
-}
+	recv_buffer[recvd_msg_size] = '\0';     // always end your sentence ;)
+	printf("%s", recv_buffer);      // simple action for now, will change
 
-void *thread_main(void *thrargs) {
-    int csock;  // maybe fix this ambiguity too? ehh whatever
-    pthread_detach(pthread_self()); // Ensures thr resources are reallocated on return
-    csock = ((struct thread_args *)thrargs) -> csock;
-    free(thrargs);
-    handle_client(csock);
-    thr_cnt--;
-    return NULL;
+	/* handler for snow days goes here */
+	
+	return 0;	
 }
 
 int main(void) {
-    int csock, ssock;
-    struct sockaddr_in saddr;
-    pthread_t tid;
-    struct thread_args *thrargs;
+	int server_socket, client_registry[MAX_CLIENTS], epoll_fd, number_fds, tmp_fd;
+	struct sockaddr_in server_addr;
+	struct epoll_event listener_event;
+	struct epoll_event ready_sockets[MAX_CLIENTS + 1];	// leave room for the listener
 
-    /* Set custom handler for SIGINT */
-    struct sigaction handler;
-    handler.sa_handler = handle_interrupt;
-    if(sigfillset(&handler.sa_mask) < 0) frick("Failed to set signal masks");
-    handler.sa_flags = 0;   // No sa_flags
-    if(sigaction(SIGINT, &handler, 0) < 0) frick("Failed to set the new handler for SIGINT");
+	memset(client_registry, 0, sizeof(int) * MAX_CLIENTS);	// zero out registry to ensure things work smoothly in main loop
 
-    /* create listening socket */
-    if((ssock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) frick("Failed to create socket");
+	/* set custom handler for SIGINT */
+	struct sigaction handler;
+	handler.sa_handler = handle_signal;
+	if(sigfillset(&handler.sa_mask) < 0) {
+		fprintf(stderr, "failed to set signal masks\n");
+		exit(1);
+	}
 
-    /* Set addressing information */
-    memset(&saddr, 0, sizeof saddr);    // Prevents ~~~BAD VOODOO~~~
-    saddr.sin_family = AF_INET;
-    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    saddr.sin_port = htons(8081);
+	handler.sa_flags = 0;	// no sa_flags
+	if(sigaction(SIGINT, &handler, 0) < 0) {
+		fprintf(stderr, "failed to set new handler for SIGINT\n");
+		exit(1);
+	}
+	
+	/* set custom handler for SIGTERM; uses same handler as SIGINT */
+	if(sigaction(SIGTERM, &handler, 0) < 0) {
+		fprintf(stderr, "failed to set new handler for SIGTERM\n");
+		exit(1);
+	}
 
-    /* Bind! And listen! */
-    if(bind(ssock, (struct sockaddr *)&saddr, sizeof saddr) < 0) frick("Failed to bind socket to port");
-    if(listen(ssock, 5) < 0) frick("Failed to listen for incoming connections");
+	/* set custom handler for SIGPIPE; uses same handler as SIGINT but gets ignored */
+	if(sigaction(SIGPIPE, &handler, 0) < 0) {
+		fprintf(stderr, "failed to set new handler for SIGPIPE\n");
+		exit(1);
+	}
 
-    /* Begin fun multithreading loop*/
-    for(;;) {
-        if(interrupt == false) {
-            csock = accept_client(ssock);
-            /* Make memory space for client arg */
-            if((thrargs = malloc(sizeof(struct thread_args))) == NULL) frick("Failed to create memory space for new client args");
-            thrargs -> csock = csock;   // Maybe differentiate better between thrargs client socket and the client socket passed to it?
-            /* Make client thread */
-            if(pthread_create(&tid, NULL, thread_main, (void *)thrargs) < 0) frick("Failed on pthread_create");
-            thr_cnt++;
-        }
-        else if (thr_cnt == 0) break;
-    }
+	/* spawn socket and prepare it for binding */
+	if((server_socket = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+		fprintf(stderr, "failed to create server socket\n");
+		exit(1);
+	}
 
-    close(csock);
-    close(ssock);
-    free(thrargs);
-    exit(0);
+	if(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) {	// be vanquished, foul error!
+		fprintf(stderr, "failed to set reusable option on listening socket\n");
+		exit(1);
+	}
+
+	memset(&server_addr, 0, sizeof(struct sockaddr_in));	// zero out to prevent ~~BAD VOODOO~~
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	server_addr.sin_port = htons(PORT);
+
+	/* bind and listen */
+	if(bind(server_socket, (struct sockaddr *)&server_addr, sizeof server_addr) < 0) {
+		fprintf(stderr, "failed to bind socket to port\n");
+		perror("guru meditation");
+		exit(1);
+	}
+
+	if(listen(server_socket, 64) < 0) {
+		fprintf(stderr, "server socket failed to listen\n");
+		exit(1);
+	}
+
+	/* epoll setup */
+	if((epoll_fd = epoll_create(MAX_CLIENTS + 1)) < 0) {	// size argument to epoll_create() is ignored, but required
+		fprintf(stderr, "failed to create epoll file descriptor\n");
+		close(server_socket);
+		exit(1);
+	}
+
+	/* add listener to epoll interest list */
+	listener_event.events = EPOLLIN;
+	listener_event.data.fd = server_socket;
+	if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_socket, &listener_event) < 0) {
+		fprintf(stderr, "failed to add listener to interest list\n");
+		close(epoll_fd);
+		close(server_socket);
+		exit(1);
+	}
+
+	/* main loop; blocks on epoll_wait() and then either accepts a new client or handles client data for "ready" sockets */
+	while(interrupt != true) {
+		/* block until an arbitrary amount of sockets are "ready" */
+		if((number_fds = epoll_wait(epoll_fd, ready_sockets, MAX_CLIENTS + 1, -1)) < 0) {
+			fprintf(stderr, "failed on epoll_wait() for some reason, probably due to SIGINT\n");
+			continue;
+		}
+
+		/* loop through "ready" sockets */
+		for(int i = 0; i < number_fds; ++i) {
+			if((tmp_fd = ready_sockets[i].data.fd) == server_socket) {	// a new client is trying to connect
+				if((tmp_fd = accept_client(server_socket, epoll_fd)) < 0) {
+					fprintf(stderr, "failed to accept client socket\n");
+					exit(1);
+				}
+
+				/* add new client to registry */
+				for(int i = 0; i < MAX_CLIENTS; ++i) {
+					if(client_registry[i] == 0) {	// this isn't ideal, but works for our purposes
+						client_registry[i] = tmp_fd;
+						break;
+					}
+
+					if(i == MAX_CLIENTS - 1) {	// execute if array is full
+						send(tmp_fd, "too many clients! try again later ...\n", 48, 0);
+						close(tmp_fd);
+					}
+				}
+			}
+
+			else {	// a client has sent data
+				if(handle_client(tmp_fd) < 0) {
+					/* remove client from registry */
+					for(int i = 0; i < MAX_CLIENTS; ++i) {
+						if(client_registry[i] == tmp_fd) {
+							close(tmp_fd);
+							client_registry[i] = 0;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	/* execute upon interrupt or epoll_wait() failure */
+	for(int i = 0; i < MAX_CLIENTS; ++i) if(client_registry[i] != 0) close(client_registry[i]);	// clean up registered clients
+	close(epoll_fd);
+	close(server_socket);
+	exit(0);
 }
