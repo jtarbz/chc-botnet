@@ -51,8 +51,14 @@ int accept_client(int server_socket, int epoll_fd) {
 
 /* receive snow day message from client and then handle it */
 int handle_client(int client_socket) {
-	unsigned char recv_buffer[RECV_SIZE];
+	unsigned char recv_buffer[RECV_SIZE], check_buffer[RECV_SIZE];
 	unsigned int recvd_msg_size = 0;
+	FILE *msg_log = fopen("./msg.log", "a+");	// open the file for reading and create if it does not exist; initial read position not defined universally, find a better way
+	
+	/* read the previous snow day message into check buffer */
+	recvd_msg_size = fread(check_buffer, sizeof(char), RECV_SIZE - 1, msg_log);
+	check_buffer[recvd_msg_size] = '\0';
+	recvd_msg_size = 0;	// reset for reuse
 
 	/* receive only one message up to (RECV_SIZE - 1) bytes in size */
 	do {
@@ -68,10 +74,14 @@ int handle_client(int client_socket) {
 	} while(recvd_msg_size < 0);
 
 	recv_buffer[recvd_msg_size] = '\0';     // always end your sentence ;)
-	printf("%s", recv_buffer);      // simple action for now, will change
-
-	/* handler for snow days goes here */
+	if(strcmp(recv_buffer, check_buffer) == 0) printf("old message received\n");
+	else {
+	printf("%s\n", recv_buffer);      // simple action for now, will change
+	freopen("./msg.log", "w", msg_log);
+	fprintf(msg_log, "%s", recv_buffer);
+	}
 	
+	fclose(msg_log);
 	return 0;	
 }
 

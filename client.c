@@ -49,7 +49,7 @@ void scrape(void *sockish) {
             free(token);
             break;
         }
-
+        
         /* LOAD HTML FILE FOR TESTING PURPOSES
         DELETE FOR FINAL COMMIT */
         FILE *fp = fopen("snowday.html", "r");
@@ -80,6 +80,7 @@ void scrape(void *sockish) {
                 strcpy(token, strtok(NULL, "<>"));
                 char *etok = token + 1; // Edited token; remove new line feed
                 while(*etok == '\x20') etok++;    // Further edit to remove spaces
+                for(int i = 0; *(etok + i) != '\0'; ++i) if(*(etok + i) == '\n') *(etok + i) = '\0';	// remove trailing line feed and tabs
                 puts(etok);
                 sleep(PINGINT);
                 if(send(*(int *)sockish, etok, strlen(etok), 0) < 0) frick("Snow day message failed to be sent");
